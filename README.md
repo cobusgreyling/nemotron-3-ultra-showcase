@@ -1,5 +1,7 @@
 # NVIDIA Nemotron 3 Ultra — Feature Showcase
 
+![NVIDIA Nemotron 3 Ultra](assets/00-header.jpg)
+
 A Gradio app that drives the live **NVIDIA Nemotron 3 Ultra** endpoint
 (`NVIDIA-Nemotron-3-Ultra-550B-A55B`) to demonstrate its headline features, styled
 in NVIDIA green.
