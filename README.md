@@ -21,6 +21,16 @@ in NVIDIA green.
 | Tool Calling | Streaming tool calls + local tool execution loop |
 | Model Card | Architecture summary and recommended settings |
 
+## Benchmarks
+
+How Nemotron 3 Ultra (550B) compares against larger frontier models.
+
+![Intelligence vs output speed](assets/04-intelligence-vs-speed.jpg)
+
+![Benchmark comparison](assets/05-benchmark-comparison.jpg)
+
+![Cost efficiency frontier](assets/06-cost-efficiency-frontier.jpg)
+
 ## Run it
 
 Requires Python 3.10+ and an NVIDIA API key with access to the Nemotron 3 Ultra
