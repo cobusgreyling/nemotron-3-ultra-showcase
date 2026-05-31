@@ -12,9 +12,10 @@ Set your key first:  export NVIDIA_API_KEY="nvapi-..."
 Then:                python app.py
 """
 
+import ast
 import json
+import operator
 import os
-import re
 
 import gradio as gr
 from openai import OpenAI
@@ -25,6 +26,10 @@ from openai import OpenAI
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 MODEL = "private/nvidia/nemotron-3-ultra-550b-a55b"
 STREAM_TIMEOUT_SECONDS = 1800
+
+# Recommended generation settings for Nemotron 3 Ultra (all reasoning modes).
+TEMPERATURE = 1.0
+TOP_P = 0.95
 
 NVIDIA_GREEN = "#76B900"
 
@@ -58,6 +63,33 @@ def build_extra_body(mode: str, budget: int | None) -> dict:
     return {"chat_template_kwargs": kwargs}
 
 
+def create_stream(client, messages, *, max_tokens, extra_body, tools=None,
+                  tool_choice=None):
+    """Single place for the shared chat.completions.create call options."""
+    kwargs = dict(
+        model=MODEL,
+        messages=messages,
+        temperature=TEMPERATURE,
+        top_p=TOP_P,
+        max_tokens=int(max_tokens),
+        stream=True,
+        timeout=STREAM_TIMEOUT_SECONDS,
+        extra_body=extra_body,
+    )
+    if tools is not None:
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+    return client.chat.completions.create(**kwargs)
+
+
+def extract_reasoning(delta) -> str | None:
+    """Nemotron streams thinking under `reasoning` or `reasoning_content`."""
+    return getattr(delta, "reasoning", None) or getattr(
+        delta, "reasoning_content", None
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Tab 1 — Reasoning Playground
 # --------------------------------------------------------------------------- #
@@ -81,22 +113,13 @@ def run_reasoning(prompt, system_prompt, mode, budget, max_tokens):
 
     reasoning, answer = "", ""
     try:
-        stream = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            temperature=1.0,
-            top_p=0.95,
-            max_tokens=int(max_tokens),
-            stream=True,
-            timeout=STREAM_TIMEOUT_SECONDS,
-            extra_body=extra_body,
+        stream = create_stream(
+            client, messages, max_tokens=max_tokens, extra_body=extra_body
         )
         for chunk in stream:
             for choice in chunk.choices:
                 delta = choice.delta
-                r = getattr(delta, "reasoning", None) or getattr(
-                    delta, "reasoning_content", None
-                )
+                r = extract_reasoning(delta)
                 if r:
                     reasoning += r
                     yield reasoning, answer or "_thinking…_", meta
@@ -134,13 +157,37 @@ MATH_TOOL_SPEC = {
 }
 
 
+# Whitelisted operators — note `**` is intentionally excluded so a prompt
+# like `9**9**9**9` can't exhaust CPU/memory.
+_ALLOWED_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _safe_eval(node):
+    if isinstance(node, ast.Expression):
+        return _safe_eval(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_OPS:
+        return _ALLOWED_OPS[type(node.op)](
+            _safe_eval(node.left), _safe_eval(node.right)
+        )
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_OPS:
+        return _ALLOWED_OPS[type(node.op)](_safe_eval(node.operand))
+    raise ValueError("only numbers and + - * / % ( ) are allowed")
+
+
 def get_math_answer(expression: str) -> str:
-    """Safe evaluator for simple arithmetic."""
-    expr = re.sub(r"\s+", "", expression)
-    if not re.match(r"^[\d+\-*/().]+$", expr):
-        return "Error: only numbers and + - * / ( ) allowed"
+    """Safe evaluator for simple arithmetic — parses an AST, never eval()."""
     try:
-        return str(eval(expr))  # noqa: S307 — input is whitelisted above
+        return str(_safe_eval(ast.parse(expression, mode="eval")))
     except Exception as e:  # noqa: BLE001
         return f"Error: {e}"
 
@@ -156,24 +203,18 @@ def run_tool_call(prompt):
     reasoning, trace = "", ""
     acc: dict = {}
     try:
-        stream = client.chat.completions.create(
-            model=MODEL,
-            messages=[user_msg],
-            temperature=1.0,
-            top_p=0.95,
+        stream = create_stream(
+            client,
+            [user_msg],
             max_tokens=8192,
-            stream=True,
-            timeout=STREAM_TIMEOUT_SECONDS,
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}},
             tools=[MATH_TOOL_SPEC],
             tool_choice="auto",
-            extra_body={"chat_template_kwargs": {"enable_thinking": True}},
         )
         for chunk in stream:
             for choice in chunk.choices:
                 delta = choice.delta
-                r = getattr(delta, "reasoning", None) or getattr(
-                    delta, "reasoning_content", None
-                )
+                r = extract_reasoning(delta)
                 if r:
                     reasoning += r
                     yield reasoning, trace, ""
@@ -234,16 +275,12 @@ def run_tool_call(prompt):
         *tool_results,
     ]
     final = ""
-    final_stream = client.chat.completions.create(
-        model=MODEL,
-        messages=follow_up,
-        temperature=1.0,
-        top_p=0.95,
+    final_stream = create_stream(
+        client,
+        follow_up,
         max_tokens=8192,
-        stream=True,
-        timeout=STREAM_TIMEOUT_SECONDS,
-        tools=[MATH_TOOL_SPEC],
         extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+        tools=[MATH_TOOL_SPEC],
     )
     for chunk in final_stream:
         for choice in chunk.choices:
@@ -434,4 +471,11 @@ Endpoint: `{NVIDIA_BASE_URL}`  ·  Model: `{MODEL}`  ·  OpenAI-compatible API.
             )
 
 if __name__ == "__main__":
-    demo.launch(theme=THEME, css=CSS, server_name="0.0.0.0", server_port=7860)
+    # Bind to localhost by default; set GRADIO_SERVER_NAME=0.0.0.0 to expose on
+    # the LAN (the app holds a live NVIDIA API key, so don't do that casually).
+    demo.launch(
+        theme=THEME,
+        css=CSS,
+        server_name=os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1"),
+        server_port=int(os.environ.get("GRADIO_SERVER_PORT", "7860")),
+    )

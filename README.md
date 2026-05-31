@@ -40,11 +40,13 @@ private endpoint.
 
 ```bash
 pip install -r requirements.txt
-export NVIDIA_API_KEY="nvapi-..."   # never commit this
+export NVIDIA_API_KEY="nvapi-..."   # never commit this — see .env.example
 python app.py
 ```
 
-Then open http://localhost:7860.
+Then open http://localhost:7860. The app binds to `127.0.0.1` by default; set
+`GRADIO_SERVER_NAME=0.0.0.0` only if you intend to expose it on your LAN (it
+holds a live API key).
 
 ## Configuration
 
@@ -60,8 +62,14 @@ The endpoint is OpenAI-compatible, so the app uses the `openai` Python client.
 
 - With thinking on, the model may emit empty `<think></think>` tags — expected when it
   decides it does not need to reason to answer confidently.
-- Reasoning mode is verbose; `max_tokens` is generous and adjustable in the UI.
-- The bundled tool is a safe, whitelisted arithmetic evaluator used only to demonstrate
-  the tool-call loop.
+- Reasoning mode is verbose. The model card recommends up to 264K tokens with reasoning
+  on; the UI slider is capped at 64K to keep the demo responsive — raise it in `app.py`
+  if you need the full budget.
+- The bundled tool is a safe arithmetic evaluator: it parses an AST and only permits
+  `+ - * / %` over numbers (no `eval`, no `**`), used only to demonstrate the tool-call loop.
 
 See [`BLOG.md`](BLOG.md) for the write-up.
+
+## License
+
+[MIT](LICENSE) © Cobus Greyling
