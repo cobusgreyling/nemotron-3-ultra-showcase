@@ -36,7 +36,7 @@ How Nemotron 3 Ultra (550B) compares against larger frontier models.
 ## Run it
 
 Requires Python 3.10+ and an NVIDIA API key with access to the Nemotron 3 Ultra
-private endpoint.
+endpoint.
 
 ```bash
 pip install -r requirements.txt
@@ -47,6 +47,8 @@ python app.py
 Then open http://localhost:7860. The app binds to `127.0.0.1` by default; set
 `GRADIO_SERVER_NAME=0.0.0.0` only if you intend to expose it on your LAN (it
 holds a live API key).
+
+**Showcase landing page (screenshots + instructions):** https://cobusgreyling.github.io/nemotron-3-ultra-showcase/
 
 ## Configuration
 
